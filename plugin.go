@@ -13,7 +13,13 @@ import (
 // (Datadog, Mimir, etc.) will follow the same plugin contract with a different prefix.
 type QueryVMetricsPlugin struct {
 	client *VMetricsClient
+	engine *mirastack.EngineContext
 	logger *zap.Logger
+}
+
+// SetEngineContext injects the engine callback context (pull model config).
+func (p *QueryVMetricsPlugin) SetEngineContext(ec *mirastack.EngineContext) {
+	p.engine = ec
 }
 
 func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
@@ -27,6 +33,9 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 			{Pattern: "query metrics", Description: "Query Prometheus/VictoriaMetrics metrics", Priority: 10},
 			{Pattern: "check metric", Description: "Check specific metric values", Priority: 8},
 			{Pattern: "label values", Description: "List label values", Priority: 5},
+		},
+		ConfigParams: []mirastack.ConfigParam{
+			{Key: "metrics_url", Type: "string", Required: true, Description: "VictoriaMetrics base URL (e.g. http://victoriametrics:8428)"},
 		},
 	}
 }
@@ -62,7 +71,7 @@ func (p *QueryVMetricsPlugin) Execute(ctx context.Context, req *mirastack.Execut
 		}, nil
 	}
 
-	result, err := p.dispatch(ctx, action, req.Params)
+	result, err := p.dispatch(ctx, action, req.Params, req.TimeRange)
 	if err != nil {
 		return &mirastack.ExecuteResponse{
 			Output: map[string]string{"error": err.Error()},
@@ -76,22 +85,22 @@ func (p *QueryVMetricsPlugin) Execute(ctx context.Context, req *mirastack.Execut
 	}, nil
 }
 
-func (p *QueryVMetricsPlugin) dispatch(ctx context.Context, action string, params map[string]string) (string, error) {
+func (p *QueryVMetricsPlugin) dispatch(ctx context.Context, action string, params map[string]string, tr *mirastack.TimeRange) (string, error) {
 	if p.client == nil {
 		return "", fmt.Errorf("plugin not configured: metrics_url not set")
 	}
 
 	switch action {
 	case "instant_query":
-		return p.actionInstantQuery(ctx, params)
+		return p.actionInstantQuery(ctx, params, tr)
 	case "range_query":
-		return p.actionRangeQuery(ctx, params)
+		return p.actionRangeQuery(ctx, params, tr)
 	case "label_names":
 		return p.actionLabelNames(ctx, params)
 	case "label_values":
 		return p.actionLabelValues(ctx, params)
 	case "series":
-		return p.actionSeries(ctx, params)
+		return p.actionSeries(ctx, params, tr)
 	case "metadata":
 		return p.actionMetadata(ctx, params)
 	default:
@@ -100,6 +109,13 @@ func (p *QueryVMetricsPlugin) dispatch(ctx context.Context, action string, param
 }
 
 func (p *QueryVMetricsPlugin) HealthCheck(ctx context.Context) error {
+	// Pull config from engine (cached 15s in SDK)
+	if p.engine != nil {
+		config, err := p.engine.GetConfig(ctx)
+		if err == nil {
+			p.applyConfig(config)
+		}
+	}
 	if p.client == nil {
 		return fmt.Errorf("not configured")
 	}
@@ -108,11 +124,15 @@ func (p *QueryVMetricsPlugin) HealthCheck(ctx context.Context) error {
 }
 
 func (p *QueryVMetricsPlugin) ConfigUpdated(_ context.Context, config map[string]string) error {
+	p.applyConfig(config)
+	return nil
+}
+
+func (p *QueryVMetricsPlugin) applyConfig(config map[string]string) {
 	if url, ok := config["metrics_url"]; ok && url != "" {
 		p.client = NewVMetricsClient(url)
 		if p.logger != nil {
 			p.logger.Info("VictoriaMetrics client updated", zap.String("url", url))
 		}
 	}
-	return nil
 }

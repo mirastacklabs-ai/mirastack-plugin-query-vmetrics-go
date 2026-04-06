@@ -4,18 +4,24 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	mirastack "github.com/mirastacklabs-ai/mirastack-sdk-go"
+	"github.com/mirastacklabs-ai/mirastack-sdk-go/datetimeutils"
 )
 
 // Action handlers for the query_vmetrics plugin.
 // Each action maps to a VictoriaMetrics Prometheus-compatible API endpoint.
 
-func (p *QueryVMetricsPlugin) actionInstantQuery(ctx context.Context, params map[string]string) (string, error) {
+func (p *QueryVMetricsPlugin) actionInstantQuery(ctx context.Context, params map[string]string, tr *mirastack.TimeRange) (string, error) {
 	query := params["query"]
 	if query == "" {
 		return "", fmt.Errorf("query parameter is required for instant_query")
 	}
 	var evalTime *string
-	if t := params["time"]; t != "" {
+	if tr != nil && tr.EndEpochMs > 0 {
+		t := datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
+		evalTime = &t
+	} else if t := params["time"]; t != "" {
 		evalTime = &t
 	}
 	result, err := p.client.InstantQuery(ctx, query, evalTime)
@@ -25,19 +31,27 @@ func (p *QueryVMetricsPlugin) actionInstantQuery(ctx context.Context, params map
 	return string(result), nil
 }
 
-func (p *QueryVMetricsPlugin) actionRangeQuery(ctx context.Context, params map[string]string) (string, error) {
+func (p *QueryVMetricsPlugin) actionRangeQuery(ctx context.Context, params map[string]string, tr *mirastack.TimeRange) (string, error) {
 	query := params["query"]
 	if query == "" {
 		return "", fmt.Errorf("query parameter is required for range_query")
 	}
-	start := params["start"]
-	if start == "" {
-		start = "-1h"
+
+	var start, end string
+	if tr != nil && tr.StartEpochMs > 0 {
+		start = datetimeutils.FormatEpochSeconds(tr.StartEpochMs)
+		end = datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
+	} else {
+		start = params["start"]
+		if start == "" {
+			start = "-1h"
+		}
+		end = params["end"]
+		if end == "" {
+			end = "now"
+		}
 	}
-	end := params["end"]
-	if end == "" {
-		end = "now"
-	}
+
 	step := params["step"]
 	if step == "" {
 		step = "1m"
@@ -78,7 +92,7 @@ func (p *QueryVMetricsPlugin) actionLabelValues(ctx context.Context, params map[
 	return string(result), nil
 }
 
-func (p *QueryVMetricsPlugin) actionSeries(ctx context.Context, params map[string]string) (string, error) {
+func (p *QueryVMetricsPlugin) actionSeries(ctx context.Context, params map[string]string, tr *mirastack.TimeRange) (string, error) {
 	matchRaw := params["match"]
 	if matchRaw == "" {
 		return "", fmt.Errorf("match parameter is required for series")
@@ -90,8 +104,16 @@ func (p *QueryVMetricsPlugin) actionSeries(ctx context.Context, params map[strin
 			matchers = append(matchers, m)
 		}
 	}
-	start := params["start"]
-	end := params["end"]
+
+	var start, end string
+	if tr != nil && tr.StartEpochMs > 0 {
+		start = datetimeutils.FormatEpochSeconds(tr.StartEpochMs)
+		end = datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
+	} else {
+		start = params["start"]
+		end = params["end"]
+	}
+
 	result, err := p.client.Series(ctx, matchers, start, end)
 	if err != nil {
 		return "", err
