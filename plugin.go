@@ -31,8 +31,8 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 			"Use this plugin when you need current or historical metric values, label discovery, " +
 			"series matching, or metric metadata. Start with instant_query for spot checks, " +
 			"range_query for trend analysis, and label_values/series for exploration.",
-		Permissions:  []mirastack.Permission{mirastack.PermissionRead},
-		DevOpsStages: []mirastack.DevOpsStage{mirastack.StageObserve},
+		Permissions:  []mirastack.Permission{mirastack.PermissionRead, mirastack.PermissionModify, mirastack.PermissionAdmin},
+		DevOpsStages: []mirastack.DevOpsStage{mirastack.StageObserve, mirastack.StageOperate},
 		Actions: []mirastack.Action{
 			{
 				ID: "instant_query",
@@ -151,6 +151,41 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Name: "result", Type: "json", Required: true, Description: "Metric metadata (type, help, unit)"},
 				},
 			},
+			{
+				ID: "delete_series",
+				Description: "Delete time series matching a label selector from VictoriaMetrics. " +
+					"This is a destructive ADMIN operation that permanently removes matching series. " +
+					"Use only for cardinality emergencies or data cleanup. Requires approval.",
+				Permission: mirastack.PermissionAdmin,
+				Stages:     []mirastack.DevOpsStage{mirastack.StageOperate},
+				Intents: []mirastack.IntentPattern{
+					{Pattern: "delete series", Description: "Delete time series from TSDB", Priority: 9},
+					{Pattern: "remove metrics", Description: "Remove metric series from storage", Priority: 8},
+					{Pattern: "cleanup series", Description: "Clean up unwanted metric series", Priority: 7},
+				},
+				InputParams: []mirastack.ParamSchema{
+					{Name: "match", Type: "string", Required: true, Description: "Series selector to delete (e.g. '{__name__=\"defunct_metric\"}')"},
+				},
+				OutputParams: []mirastack.ParamSchema{
+					{Name: "result", Type: "json", Required: true, Description: "Deletion confirmation"},
+				},
+			},
+			{
+				ID: "snapshot",
+				Description: "Create a TSDB snapshot for backup purposes. " +
+					"Creates a consistent point-in-time snapshot of all metric data. " +
+					"Returns the snapshot name which can be used for backup/restore.",
+				Permission: mirastack.PermissionModify,
+				Stages:     []mirastack.DevOpsStage{mirastack.StageOperate},
+				Intents: []mirastack.IntentPattern{
+					{Pattern: "create snapshot", Description: "Create a TSDB backup snapshot", Priority: 9},
+					{Pattern: "backup metrics", Description: "Back up metric data via snapshot", Priority: 8},
+					{Pattern: "tsdb snapshot", Description: "Take a VictoriaMetrics snapshot", Priority: 7},
+				},
+				OutputParams: []mirastack.ParamSchema{
+					{Name: "result", Type: "json", Required: true, Description: "Snapshot creation result with snapshot name"},
+				},
+			},
 		},
 		Intents: []mirastack.IntentPattern{
 			{Pattern: "query metrics", Description: "Query Prometheus/VictoriaMetrics metrics", Priority: 10},
@@ -240,6 +275,10 @@ func (p *QueryVMetricsPlugin) dispatch(ctx context.Context, action string, param
 		return p.actionSeries(ctx, params, tr)
 	case "metadata":
 		return p.actionMetadata(ctx, params)
+	case "delete_series":
+		return p.actionDeleteSeries(ctx, params)
+	case "snapshot":
+		return p.actionSnapshot(ctx)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
 	}

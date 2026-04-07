@@ -132,3 +132,22 @@ func (p *QueryVMetricsPlugin) actionMetadata(ctx context.Context, params map[str
 	}
 	return string(result), nil
 }
+
+func (p *QueryVMetricsPlugin) actionDeleteSeries(ctx context.Context, params map[string]string) (string, error) {
+	match := params["match"]
+	if match == "" {
+		return "", fmt.Errorf("match parameter is required for delete_series")
+	}
+	if err := p.client.DeleteSeries(ctx, match); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`{"status":"success","deleted":"%s"}`, match), nil
+}
+
+func (p *QueryVMetricsPlugin) actionSnapshot(ctx context.Context) (string, error) {
+	result, err := p.client.Snapshot(ctx)
+	if err != nil {
+		return "", err
+	}
+	return string(result), nil
+}

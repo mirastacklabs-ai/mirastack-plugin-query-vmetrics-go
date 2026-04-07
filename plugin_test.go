@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"testing"
+
+	mirastack "github.com/mirastacklabs-ai/mirastack-agents-sdk-go"
 )
 
 func TestInfo_HasPerActionIntents(t *testing.T) {
@@ -141,5 +143,95 @@ func TestEnrichMetricsOutput_JSONMarshalable(t *testing.T) {
 	_, err := json.Marshal(out)
 	if err != nil {
 		t.Errorf("enriched output not JSON-serializable: %v", err)
+	}
+}
+
+func TestInfo_DeleteSeriesAction_AdminPermission(t *testing.T) {
+	p := &QueryVMetricsPlugin{}
+	info := p.Info()
+
+	var found bool
+	for _, action := range info.Actions {
+		if action.ID == "delete_series" {
+			found = true
+			if action.Permission != mirastack.PermissionAdmin {
+				t.Errorf("delete_series should have ADMIN permission, got %v", action.Permission)
+			}
+			if len(action.Intents) == 0 {
+				t.Error("delete_series should have per-action intents")
+			}
+			// Verify match param is required
+			hasMatch := false
+			for _, p := range action.InputParams {
+				if p.Name == "match" && p.Required {
+					hasMatch = true
+				}
+			}
+			if !hasMatch {
+				t.Error("delete_series should have required 'match' input param")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("delete_series action not found in Info()")
+	}
+}
+
+func TestInfo_SnapshotAction_ModifyPermission(t *testing.T) {
+	p := &QueryVMetricsPlugin{}
+	info := p.Info()
+
+	var found bool
+	for _, action := range info.Actions {
+		if action.ID == "snapshot" {
+			found = true
+			if action.Permission != mirastack.PermissionModify {
+				t.Errorf("snapshot should have MODIFY permission, got %v", action.Permission)
+			}
+			if len(action.Intents) == 0 {
+				t.Error("snapshot should have per-action intents")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("snapshot action not found in Info()")
+	}
+}
+
+func TestInfo_PluginPermissionsIncludeAdminModify(t *testing.T) {
+	p := &QueryVMetricsPlugin{}
+	info := p.Info()
+
+	hasAdmin := false
+	hasModify := false
+	for _, perm := range info.Permissions {
+		if perm == mirastack.PermissionAdmin {
+			hasAdmin = true
+		}
+		if perm == mirastack.PermissionModify {
+			hasModify = true
+		}
+	}
+	if !hasAdmin {
+		t.Error("plugin permissions should include ADMIN")
+	}
+	if !hasModify {
+		t.Error("plugin permissions should include MODIFY")
+	}
+}
+
+func TestActionDeleteSeries_RequiresMatch(t *testing.T) {
+	p := &QueryVMetricsPlugin{}
+	_, err := p.actionDeleteSeries(nil, map[string]string{})
+	if err == nil {
+		t.Error("expected error when match is empty")
+	}
+}
+
+func TestActionSnapshot_RequiresClient(t *testing.T) {
+	p := &QueryVMetricsPlugin{}
+	_, err := p.dispatch(nil, "snapshot", nil, nil)
+	if err == nil {
+		t.Error("expected error when client is nil")
 	}
 }

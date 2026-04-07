@@ -88,6 +88,40 @@ func (c *VMetricsClient) Metadata(ctx context.Context, metric *string) (json.Raw
 	return c.get(ctx, "/api/v1/metadata", params)
 }
 
+// DeleteSeries deletes time series matching the provided selector.
+// VictoriaMetrics admin endpoint: POST /api/v1/admin/tsdb/delete_series
+func (c *VMetricsClient) DeleteSeries(ctx context.Context, match string) error {
+	params := url.Values{"match[]": {match}}
+	u := c.baseURL + "/api/v1/admin/tsdb/delete_series?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("VictoriaMetrics delete_series error (HTTP %d): %s", resp.StatusCode, truncate(string(body), 512))
+	}
+	return nil
+}
+
+// Snapshot creates a TSDB snapshot for backup purposes.
+// VictoriaMetrics endpoint: GET /snapshot/create
+func (c *VMetricsClient) Snapshot(ctx context.Context) (json.RawMessage, error) {
+	return c.get(ctx, "/snapshot/create", nil)
+}
+
 // get performs a GET request and returns the raw JSON body.
 func (c *VMetricsClient) get(ctx context.Context, path string, params url.Values) (json.RawMessage, error) {
 	u := c.baseURL + path
