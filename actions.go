@@ -12,6 +12,18 @@ import (
 // Action handlers for the query_vmetrics plugin.
 // Each action maps to a VictoriaMetrics Prometheus-compatible API endpoint.
 
+// isValidVMTimeParam returns true if the value is a non-empty string that
+// VictoriaMetrics can parse as a time parameter: a relative duration like
+// "-1h", "now", an epoch-seconds number, or an RFC3339 timestamp.
+// Bare punctuation such as "-" is rejected.
+func isValidVMTimeParam(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "-" || v == "+" {
+		return false
+	}
+	return true
+}
+
 func (p *QueryVMetricsPlugin) actionInstantQuery(ctx context.Context, params map[string]string, tr *mirastack.TimeRange) (string, error) {
 	query := params["query"]
 	if query == "" {
@@ -42,13 +54,18 @@ func (p *QueryVMetricsPlugin) actionRangeQuery(ctx context.Context, params map[s
 		start = datetimeutils.FormatEpochSeconds(tr.StartEpochMs)
 		end = datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
 	} else {
+		// Fallback to raw params for backward compatibility (direct API calls).
+		// Apply sensible defaults using NowUTCMs() when params are empty or invalid.
 		start = params["start"]
-		if start == "" {
-			start = "-1h"
-		}
 		end = params["end"]
-		if end == "" {
-			end = "now"
+		if !isValidVMTimeParam(start) {
+			nowMs := datetimeutils.NowUTCMs()
+			start = datetimeutils.FormatEpochSeconds(nowMs - 3600000) // default: 1h ago
+			if !isValidVMTimeParam(end) {
+				end = datetimeutils.FormatEpochSeconds(nowMs)
+			}
+		} else if !isValidVMTimeParam(end) {
+			end = datetimeutils.FormatEpochSeconds(datetimeutils.NowUTCMs())
 		}
 	}
 
@@ -112,6 +129,12 @@ func (p *QueryVMetricsPlugin) actionSeries(ctx context.Context, params map[strin
 	} else {
 		start = params["start"]
 		end = params["end"]
+		if !isValidVMTimeParam(start) {
+			start = ""
+		}
+		if !isValidVMTimeParam(end) {
+			end = ""
+		}
 	}
 
 	result, err := p.client.Series(ctx, matchers, start, end)
