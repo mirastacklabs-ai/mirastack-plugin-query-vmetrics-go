@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go"
 	"go.uber.org/zap"
@@ -235,6 +236,13 @@ func (p *QueryVMetricsPlugin) Execute(ctx context.Context, req *mirastack.Execut
 		p.logger, _ = zap.NewProduction()
 	}
 
+	// Pull config from engine if client is not yet initialized (cached 15s in SDK).
+	if p.client == nil && p.engine != nil {
+		if config, err := p.engine.GetConfig(ctx); err == nil {
+			p.applyConfig(config)
+		}
+	}
+
 	action := req.ActionID
 	if action == "" {
 		action = req.Params["action"]
@@ -252,7 +260,7 @@ func (p *QueryVMetricsPlugin) Execute(ctx context.Context, req *mirastack.Execut
 		return resp, nil
 	}
 
-	resp, _ := mirastack.RespondMap(enrichMetricsOutput(action, result))
+	resp, _ := mirastack.RespondJSON(enrichMetricsOutput(action, result))
 	resp.Logs = []string{fmt.Sprintf("action %s completed", action)}
 	return resp, nil
 }
@@ -314,8 +322,12 @@ func (p *QueryVMetricsPlugin) applyConfig(config map[string]string) {
 }
 
 // enrichMetricsOutput wraps raw query results with metadata for LLM consumption.
-func enrichMetricsOutput(action, raw string) map[string]any {
-	out := map[string]any{
+// The return type is map[string]string to honour the plugin CallPlugin contract:
+// the SDK unmarshals plugin responses into map[string]string and panics on
+// non-string JSON values. All numeric / boolean metadata is therefore stringified
+// here rather than at the SDK boundary.
+func enrichMetricsOutput(action, raw string) map[string]string {
+	out := map[string]string{
 		"action": action,
 		"result": raw,
 	}
@@ -323,7 +335,7 @@ func enrichMetricsOutput(action, raw string) map[string]any {
 	const maxLen = 32000
 	if len(raw) > maxLen {
 		out["result"] = raw[:maxLen]
-		out["truncated"] = true
+		out["truncated"] = "true"
 	}
 
 	// Try to extract result count from the JSON response.
@@ -334,11 +346,11 @@ func enrichMetricsOutput(action, raw string) map[string]any {
 			case map[string]any:
 				if result, ok := d["result"]; ok {
 					if arr, ok := result.([]any); ok {
-						out["result_count"] = len(arr)
+						out["result_count"] = strconv.Itoa(len(arr))
 					}
 				}
 			case []any:
-				out["result_count"] = len(d)
+				out["result_count"] = strconv.Itoa(len(d))
 			}
 		}
 		if status, ok := parsed["status"].(string); ok {

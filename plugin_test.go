@@ -82,8 +82,8 @@ func TestEnrichMetricsOutput_ExtractsResultCount(t *testing.T) {
 	raw := `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up"},"value":[1,"1"]},{"metric":{"__name__":"down"},"value":[1,"0"]}]}}`
 	out := enrichMetricsOutput("instant_query", raw)
 
-	if out["result_count"] != 2 {
-		t.Errorf("expected result_count=2, got %v", out["result_count"])
+	if out["result_count"] != "2" {
+		t.Errorf("expected result_count=\"2\", got %v", out["result_count"])
 	}
 }
 
@@ -95,11 +95,11 @@ func TestEnrichMetricsOutput_Truncation(t *testing.T) {
 	}
 	out := enrichMetricsOutput("range_query", string(long))
 
-	if out["truncated"] != true {
-		t.Error("expected truncated=true for oversized result")
+	if out["truncated"] != "true" {
+		t.Error("expected truncated=\"true\" for oversized result")
 	}
-	if len(out["result"].(string)) != 32000 {
-		t.Errorf("expected truncated result length=32000, got %d", len(out["result"].(string)))
+	if len(out["result"]) != 32000 {
+		t.Errorf("expected truncated result length=32000, got %d", len(out["result"]))
 	}
 }
 
@@ -107,8 +107,8 @@ func TestEnrichMetricsOutput_LabelNamesArray(t *testing.T) {
 	raw := `{"status":"success","data":["__name__","job","instance"]}`
 	out := enrichMetricsOutput("label_names", raw)
 
-	if out["result_count"] != 3 {
-		t.Errorf("expected result_count=3, got %v", out["result_count"])
+	if out["result_count"] != "3" {
+		t.Errorf("expected result_count=\"3\", got %v", out["result_count"])
 	}
 }
 
