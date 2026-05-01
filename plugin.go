@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go"
@@ -313,7 +314,11 @@ func (p *QueryVMetricsPlugin) ConfigUpdated(_ context.Context, config map[string
 }
 
 func (p *QueryVMetricsPlugin) applyConfig(config map[string]string) {
-	if url, ok := config["metrics_url"]; ok && url != "" {
+	url := config["metrics_url"]
+	if url == "" {
+		url = os.Getenv("MIRASTACK_METRICS_URL")
+	}
+	if url != "" {
 		p.client = NewVMetricsClient(url)
 		if p.logger != nil {
 			p.logger.Info("VictoriaMetrics client updated", zap.String("url", url))
