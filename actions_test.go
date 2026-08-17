@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	mirastack "github.com/mirastacklabs-ai/mirastack-agents-sdk-go"
@@ -70,8 +71,8 @@ func TestActionRangeQuery_UsesTimeRange(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expectedStart := datetimeutils.FormatEpochSeconds(tr.StartEpochMs)
-	expectedEnd := datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
+	expectedStart := strconv.FormatInt(tr.StartEpochMs/1000, 10)
+	expectedEnd := strconv.FormatInt(tr.EndEpochMs/1000, 10)
 
 	if capturedStart != expectedStart {
 		t.Errorf("expected start=%s, got %s", expectedStart, capturedStart)
@@ -151,7 +152,7 @@ func TestActionRangeQuery_FallbackAcceptsValidRelative(t *testing.T) {
 
 	p := &QueryVMetricsPlugin{client: NewVMetricsClient(srv.URL)}
 
-	// Valid relative params should pass through untouched
+	// Relative params are normalized to concrete epoch seconds.
 	_, err := p.actionRangeQuery(context.Background(), map[string]string{
 		"query": "up",
 		"start": "-1h",
@@ -161,11 +162,11 @@ func TestActionRangeQuery_FallbackAcceptsValidRelative(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedStart != "-1h" {
-		t.Errorf("expected start=-1h, got %q", capturedStart)
+	if capturedStart == "" || capturedStart == "-1h" {
+		t.Errorf("expected normalized epoch-seconds start, got %q", capturedStart)
 	}
-	if capturedEnd != "now" {
-		t.Errorf("expected end=now, got %q", capturedEnd)
+	if capturedEnd == "" || capturedEnd == "now" {
+		t.Errorf("expected normalized epoch-seconds end, got %q", capturedEnd)
 	}
 }
 
@@ -197,8 +198,8 @@ func TestActionRangeQuery_DefaultStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if capturedStep != "1m" {
-		t.Errorf("expected default step=1m, got %q", capturedStep)
+	if capturedStep != "30s" {
+		t.Errorf("expected adaptive default step=30s for 1h range, got %q", capturedStep)
 	}
 }
 
@@ -227,7 +228,7 @@ func TestActionInstantQuery_UsesTimeRange(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
+	expected := strconv.FormatInt(tr.EndEpochMs/1000, 10)
 	if capturedTime != expected {
 		t.Errorf("expected time=%s, got %s", expected, capturedTime)
 	}

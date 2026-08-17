@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	mirastack "github.com/mirastacklabs-ai/mirastack-agents-sdk-go"
 	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go/datetimeutils"
+	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go/telemetrycache"
 )
 
 // Action handlers for the query_vmetrics plugin.
@@ -25,18 +28,21 @@ func isValidVMTimeParam(v string) bool {
 }
 
 func (p *QueryVMetricsPlugin) actionInstantQuery(ctx context.Context, params map[string]string, tr *mirastack.TimeRange) (string, error) {
-	query := params["query"]
+	query := telemetrycache.SanitizePromQL(params["query"])
 	if query == "" {
 		return "", fmt.Errorf("query parameter is required for instant_query")
 	}
-	var evalTime *string
-	if tr != nil && tr.EndEpochMs > 0 {
-		t := datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
-		evalTime = &t
-	} else if t := params["time"]; t != "" {
-		evalTime = &t
-	}
-	result, err := p.client.InstantQuery(ctx, query, evalTime)
+
+	evalSec := resolveInstantEvalSec(params["time"], tr)
+	dsID := resolveDataSourceID(params)
+	result, err := telemetrycache.InstantQueryCached(ctx, p.engine, dsID, query, evalSec, func() ([]byte, error) {
+		var evalTime *string
+		if evalSec > 0 {
+			eval := strconv.FormatInt(evalSec, 10)
+			evalTime = &eval
+		}
+		return p.client.InstantQuery(ctx, query, evalTime)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -44,40 +50,109 @@ func (p *QueryVMetricsPlugin) actionInstantQuery(ctx context.Context, params map
 }
 
 func (p *QueryVMetricsPlugin) actionRangeQuery(ctx context.Context, params map[string]string, tr *mirastack.TimeRange) (string, error) {
-	query := params["query"]
+	query := telemetrycache.SanitizePromQL(params["query"])
 	if query == "" {
 		return "", fmt.Errorf("query parameter is required for range_query")
 	}
-
-	var start, end string
-	if tr != nil && tr.StartEpochMs > 0 {
-		start = datetimeutils.FormatEpochSeconds(tr.StartEpochMs)
-		end = datetimeutils.FormatEpochSeconds(tr.EndEpochMs)
-	} else {
-		// Fallback to raw params for backward compatibility (direct API calls).
-		// Apply sensible defaults using NowUTCMs() when params are empty or invalid.
-		start = params["start"]
-		end = params["end"]
-		if !isValidVMTimeParam(start) {
-			nowMs := datetimeutils.NowUTCMs()
-			start = datetimeutils.FormatEpochSeconds(nowMs - 3600000) // default: 1h ago
-			if !isValidVMTimeParam(end) {
-				end = datetimeutils.FormatEpochSeconds(nowMs)
-			}
-		} else if !isValidVMTimeParam(end) {
-			end = datetimeutils.FormatEpochSeconds(datetimeutils.NowUTCMs())
-		}
-	}
-
+	startSec, endSec := resolveRangeBoundsSec(params, tr)
 	step := params["step"]
 	if step == "" {
-		step = "1m"
+		step = telemetrycache.AdaptiveStep(startSec*1000, endSec*1000)
 	}
-	result, err := p.client.RangeQuery(ctx, query, start, end, step)
+	dsID := resolveDataSourceID(params)
+	result, err := telemetrycache.WithStepRetry(startSec, endSec, step, func(stepForRun string) ([]byte, error) {
+		return telemetrycache.RangeQueryCached(
+			ctx,
+			p.engine,
+			"metrics",
+			dsID,
+			query,
+			startSec,
+			endSec,
+			stepForRun,
+			func(cStart, cEnd int64, chunkStep string) ([]byte, error) {
+				return p.client.RangeQuery(
+					ctx,
+					query,
+					strconv.FormatInt(cStart, 10),
+					strconv.FormatInt(cEnd, 10),
+					chunkStep,
+				)
+			},
+		)
+	})
 	if err != nil {
 		return "", err
 	}
 	return string(result), nil
+}
+
+func resolveDataSourceID(params map[string]string) string {
+	for _, k := range []string{"data_source_id", "datasource_id", "integration_id"} {
+		if v := strings.TrimSpace(params[k]); v != "" {
+			return v
+		}
+	}
+	return "default"
+}
+
+func resolveInstantEvalSec(raw string, tr *mirastack.TimeRange) int64 {
+	if tr != nil && tr.EndEpochMs > 0 {
+		return tr.EndEpochMs / 1000
+	}
+	nowSec := time.Now().UTC().Unix()
+	if sec, ok := vmTimeParamToSec(raw, nowSec); ok {
+		return sec
+	}
+	return nowSec
+}
+
+func resolveRangeBoundsSec(params map[string]string, tr *mirastack.TimeRange) (int64, int64) {
+	if tr != nil && tr.StartEpochMs > 0 {
+		return tr.StartEpochMs / 1000, tr.EndEpochMs / 1000
+	}
+	nowSec := time.Now().UTC().Unix()
+	startSec, startOK := vmTimeParamToSec(params["start"], nowSec)
+	endSec, endOK := vmTimeParamToSec(params["end"], nowSec)
+
+	switch {
+	case !startOK && !endOK:
+		endSec = nowSec
+		startSec = endSec - 3600
+	case !startOK && endOK:
+		startSec = endSec - 3600
+	case startOK && !endOK:
+		endSec = nowSec
+	}
+	if endSec <= startSec {
+		endSec = nowSec
+		startSec = endSec - 3600
+	}
+	return startSec, endSec
+}
+
+func vmTimeParamToSec(raw string, nowSec int64) (int64, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return 0, false
+	}
+	if v == "now" {
+		return nowSec, true
+	}
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if n > 1_000_000_000_000 {
+			return n / 1000, true
+		}
+		return n, true
+	}
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		n := int64(f)
+		if n > 1_000_000_000_000 {
+			return n / 1000, true
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 func (p *QueryVMetricsPlugin) actionLabelNames(ctx context.Context, params map[string]string) (string, error) {

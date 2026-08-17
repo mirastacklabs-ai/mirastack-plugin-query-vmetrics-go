@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go/telemetrycache"
 )
 
 // VMetricsClient is an HTTP client for the VictoriaMetrics Prometheus-compatible API.
@@ -146,7 +148,10 @@ func (c *VMetricsClient) get(ctx context.Context, path string, params url.Values
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("VictoriaMetrics API error (HTTP %d): %s", resp.StatusCode, truncate(string(body), 512))
+		return nil, &telemetrycache.HTTPStatusError{
+			Code: resp.StatusCode,
+			Body: fmt.Sprintf("VictoriaMetrics API error (HTTP %d): %s", resp.StatusCode, truncate(string(body), 512)),
+		}
 	}
 
 	return json.RawMessage(body), nil

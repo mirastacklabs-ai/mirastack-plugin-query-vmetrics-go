@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
+	"strings"
 
 	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go"
+	"github.com/mirastacklabs-ai/mirastack-agents-sdk-go/obs"
 	"go.uber.org/zap"
 )
 
@@ -23,6 +24,25 @@ type QueryVMetricsPlugin struct {
 // SetEngineContext injects the engine callback context (pull model config).
 func (p *QueryVMetricsPlugin) SetEngineContext(ec *mirastack.EngineContext) {
 	p.engine = ec
+}
+
+func metricsRouting(
+	acceptedIntentDomain string,
+	capabilityDomain string,
+	positiveUseCases []string,
+	negativeUseCases []string,
+	entityTypes []string,
+) mirastack.RoutingSemantics {
+	return mirastack.RoutingSemantics{
+		SchemaVersion:         mirastack.RoutingSemanticsSchemaVersionV1,
+		AcceptedIntentDomains: []string{acceptedIntentDomain},
+		CapabilityDomain:      capabilityDomain,
+		PositiveUseCases:      positiveUseCases,
+		NegativeUseCases:      negativeUseCases,
+		SignalDomains:         []string{"core.signal.metrics"},
+		BackendDomains:        []string{"core.backend.victoriametrics"},
+		EntityTypes:           entityTypes,
+	}
 }
 
 func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
@@ -49,6 +69,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "current value of", Description: "Check what a metric reads right now", Priority: 8},
 					{Pattern: "evaluate expression", Description: "Evaluate a MetricsQL expression", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.observe.metrics.query",
+					"core.observe.metrics.query.instant",
+					[]string{"Fetch a metric value at the current or explicit timestamp."},
+					[]string{"Do not use for historical trend analysis over ranges."},
+					[]string{"core.entity.metric"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "query", Type: "string", Required: true, Description: "PromQL/MetricsQL query expression (e.g. 'up{job=\"node\"}' or 'rate(http_requests_total[5m])')"},
 				},
@@ -69,6 +96,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "metric trend", Description: "Analyze metric behaviour over time", Priority: 8},
 					{Pattern: "time series for", Description: "Get time series data for a metric", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.observe.metrics.query",
+					"core.observe.metrics.query.range",
+					[]string{"Fetch time-series samples over a window for trend analysis."},
+					[]string{"Do not use when only a single point-in-time value is needed."},
+					[]string{"core.entity.metric", "core.entity.timeseries"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "query", Type: "string", Required: true, Description: "PromQL/MetricsQL query expression"},
 					{Name: "step", Type: "string", Required: false, Description: "Query resolution step (e.g., 15s, 1m, 5m). Defaults to 1m."},
@@ -89,6 +123,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "what labels exist", Description: "Discover available metric dimensions", Priority: 8},
 					{Pattern: "available dimensions", Description: "List filterable label dimensions", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.observe.metrics.discovery",
+					"core.observe.metrics.discovery.label_names",
+					[]string{"Discover available label keys before composing PromQL filters."},
+					[]string{"Do not use to retrieve values for a specific label."},
+					[]string{"core.entity.label", "core.entity.metric"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "match", Type: "string", Required: false, Description: "Series selector(s) to scope label names (comma-separated)"},
 				},
@@ -108,6 +149,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "which services", Description: "Find service names from metrics", Priority: 8},
 					{Pattern: "values of label", Description: "Enumerate values for a dimension", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.observe.metrics.discovery",
+					"core.observe.metrics.discovery.label_values",
+					[]string{"Discover concrete label values for query scoping."},
+					[]string{"Do not use to list label keys without a target label name."},
+					[]string{"core.entity.label", "core.entity.metric"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "label", Type: "string", Required: true, Description: "Label name to get values for (e.g. 'job', 'namespace', 'instance')"},
 				},
@@ -127,6 +175,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "matching series", Description: "List series that match a selector", Priority: 8},
 					{Pattern: "what series exist for", Description: "Discover series for a metric or job", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.observe.metrics.discovery",
+					"core.observe.metrics.discovery.series",
+					[]string{"Enumerate matching time series and their label sets."},
+					[]string{"Do not use for aggregated value computation over time windows."},
+					[]string{"core.entity.timeseries", "core.entity.label"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "match", Type: "string", Required: true, Description: "Series selector(s) (comma-separated, e.g. '{job=\"node\"}')"},
 				},
@@ -146,6 +201,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "what does metric measure", Description: "Understand a metric's purpose", Priority: 8},
 					{Pattern: "describe metric", Description: "Describe a metric name", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.observe.metrics.discovery",
+					"core.observe.metrics.discovery.metadata",
+					[]string{"Inspect metric metadata such as type, help text, and unit."},
+					[]string{"Do not use when numerical samples are needed instead of metadata."},
+					[]string{"core.entity.metric"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "metric", Type: "string", Required: true, Description: "Metric name for metadata lookup (e.g. 'node_cpu_seconds_total')"},
 				},
@@ -165,6 +227,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "remove metrics", Description: "Remove metric series from storage", Priority: 8},
 					{Pattern: "cleanup series", Description: "Clean up unwanted metric series", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.operate.metrics.hygiene",
+					"core.operate.metrics.hygiene.delete_series",
+					[]string{"Remove known unwanted metric series during controlled cleanup."},
+					[]string{"Do not use for routine metric querying or ad-hoc analysis."},
+					[]string{"core.entity.timeseries", "core.entity.metric"},
+				),
 				InputParams: []mirastack.ParamSchema{
 					{Name: "match", Type: "string", Required: true, Description: "Series selector to delete (e.g. '{__name__=\"defunct_metric\"}')"},
 				},
@@ -184,6 +253,13 @@ func (p *QueryVMetricsPlugin) Info() *mirastack.PluginInfo {
 					{Pattern: "backup metrics", Description: "Back up metric data via snapshot", Priority: 8},
 					{Pattern: "tsdb snapshot", Description: "Take a VictoriaMetrics snapshot", Priority: 7},
 				},
+				Routing: metricsRouting(
+					"core.operate.metrics.backup",
+					"core.operate.metrics.backup.snapshot",
+					[]string{"Create a point-in-time backup snapshot for TSDB data."},
+					[]string{"Do not use for deleting or mutating metric series."},
+					[]string{"core.entity.snapshot", "core.entity.metric"},
+				),
 				OutputParams: []mirastack.ParamSchema{
 					{Name: "result", Type: "json", Required: true, Description: "Snapshot creation result with snapshot name"},
 				},
@@ -248,21 +324,29 @@ func (p *QueryVMetricsPlugin) Execute(ctx context.Context, req *mirastack.Execut
 	if action == "" {
 		action = req.Params["action"]
 	}
+	observedAction := action
+	if observedAction == "" {
+		observedAction = "unknown"
+	}
+	actionCtx, actionSpan := obs.StartAction(ctx, "query_vmetrics", observedAction, queryVMetricsActionPermission(action))
 	if action == "" {
+		actionSpan.EndWithError(actionCtx, fmt.Errorf("action parameter is required"))
 		resp, _ := mirastack.RespondError("action parameter is required")
 		resp.Logs = []string{"missing required parameter: action"}
 		return resp, nil
 	}
 
-	result, err := p.dispatch(ctx, action, req.Params, req.TimeRange)
+	result, err := p.dispatch(actionCtx, action, req.Params, req.TimeRange)
 	if err != nil {
+		actionSpan.EndWithError(actionCtx, err)
 		resp, _ := mirastack.RespondError(err.Error())
 		resp.Logs = []string{fmt.Sprintf("action %s failed: %v", action, err)}
 		return resp, nil
 	}
 
-	resp, _ := mirastack.RespondJSON(enrichMetricsOutput(action, result))
+	resp, _ := mirastack.RespondJSON(enrichMetricsOutput(action, req.Params, result))
 	resp.Logs = []string{fmt.Sprintf("action %s completed", action)}
+	actionSpan.End(actionCtx)
 	return resp, nil
 }
 
@@ -326,21 +410,29 @@ func (p *QueryVMetricsPlugin) applyConfig(config map[string]string) {
 	}
 }
 
-// enrichMetricsOutput wraps raw query results with metadata for LLM consumption.
-// The return type is map[string]string to honour the plugin CallPlugin contract:
-// the SDK unmarshals plugin responses into map[string]string and panics on
-// non-string JSON values. All numeric / boolean metadata is therefore stringified
-// here rather than at the SDK boundary.
-func enrichMetricsOutput(action, raw string) map[string]string {
-	out := map[string]string{
+// enrichMetricsOutput wraps raw query results with metadata for LLM/UI consumers.
+// It returns native JSON values so the engine can preserve deterministic chart data.
+func enrichMetricsOutput(action string, params map[string]string, raw string) map[string]any {
+	out := map[string]any{
 		"action": action,
-		"result": raw,
+	}
+	if q := strings.TrimSpace(params["query"]); q != "" {
+		out["query"] = q
+	}
+	if step := strings.TrimSpace(params["step"]); step != "" {
+		out["step"] = step
+	}
+	if start := strings.TrimSpace(params["start"]); start != "" {
+		out["start"] = start
+	}
+	if end := strings.TrimSpace(params["end"]); end != "" {
+		out["end"] = end
 	}
 
-	const maxLen = 32000
-	if len(raw) > maxLen {
-		out["result"] = raw[:maxLen]
-		out["truncated"] = "true"
+	if parsed := parseJSON(raw); parsed != nil {
+		out["result"] = parsed
+	} else {
+		out["result"] = raw
 	}
 
 	// Try to extract result count from the JSON response.
@@ -351,11 +443,11 @@ func enrichMetricsOutput(action, raw string) map[string]string {
 			case map[string]any:
 				if result, ok := d["result"]; ok {
 					if arr, ok := result.([]any); ok {
-						out["result_count"] = strconv.Itoa(len(arr))
+						out["result_count"] = len(arr)
 					}
 				}
 			case []any:
-				out["result_count"] = strconv.Itoa(len(d))
+				out["result_count"] = len(d)
 			}
 		}
 		if status, ok := parsed["status"].(string); ok {
@@ -364,4 +456,25 @@ func enrichMetricsOutput(action, raw string) map[string]string {
 	}
 
 	return out
+}
+
+func parseJSON(raw string) any {
+	var parsed any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
+func queryVMetricsActionPermission(action string) string {
+	switch action {
+	case "delete_series":
+		return "ADMIN"
+	case "snapshot":
+		return "MODIFY"
+	case "instant_query", "range_query", "label_names", "label_values", "series", "metadata":
+		return "READ"
+	default:
+		return "UNKNOWN"
+	}
 }

@@ -68,7 +68,7 @@ func TestInfo_ActionDescriptionsEnriched(t *testing.T) {
 }
 
 func TestEnrichMetricsOutput_BasicFields(t *testing.T) {
-	out := enrichMetricsOutput("instant_query", `{"status":"success"}`)
+	out := enrichMetricsOutput("instant_query", nil, `{"status":"success"}`)
 
 	if out["action"] != "instant_query" {
 		t.Errorf("expected action=instant_query, got %v", out["action"])
@@ -80,40 +80,66 @@ func TestEnrichMetricsOutput_BasicFields(t *testing.T) {
 
 func TestEnrichMetricsOutput_ExtractsResultCount(t *testing.T) {
 	raw := `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up"},"value":[1,"1"]},{"metric":{"__name__":"down"},"value":[1,"0"]}]}}`
-	out := enrichMetricsOutput("instant_query", raw)
+	out := enrichMetricsOutput("instant_query", nil, raw)
 
-	if out["result_count"] != "2" {
-		t.Errorf("expected result_count=\"2\", got %v", out["result_count"])
+	if out["result_count"] != 2 {
+		t.Errorf("expected result_count=2, got %v", out["result_count"])
 	}
 }
 
-func TestEnrichMetricsOutput_Truncation(t *testing.T) {
-	// Generate a string longer than 32000 chars.
+func TestEnrichMetricsOutput_EchoesQueryContext(t *testing.T) {
+	out := enrichMetricsOutput("range_query", map[string]string{
+		"query": "rate(http_requests_total[5m])",
+		"step":  "30s",
+		"start": "1710000000",
+		"end":   "1710003600",
+	}, `{"status":"success","data":{"result":[]}}`)
+
+	if out["query"] != "rate(http_requests_total[5m])" {
+		t.Errorf("expected echoed query, got %q", out["query"])
+	}
+	if out["step"] != "30s" {
+		t.Errorf("expected echoed step, got %q", out["step"])
+	}
+	if out["start"] != "1710000000" {
+		t.Errorf("expected echoed start, got %q", out["start"])
+	}
+	if out["end"] != "1710003600" {
+		t.Errorf("expected echoed end, got %q", out["end"])
+	}
+}
+
+func TestEnrichMetricsOutput_PreservesLargePayload(t *testing.T) {
+	// Generate a string larger than the former truncation threshold.
 	long := make([]byte, 33000)
 	for i := range long {
 		long[i] = 'x'
 	}
-	out := enrichMetricsOutput("range_query", string(long))
+	out := enrichMetricsOutput("range_query", nil, string(long))
 
-	if out["truncated"] != "true" {
-		t.Error("expected truncated=\"true\" for oversized result")
+	if _, exists := out["truncated"]; exists {
+		t.Fatal("did not expect truncated marker")
 	}
-	if len(out["result"]) != 32000 {
-		t.Errorf("expected truncated result length=32000, got %d", len(out["result"]))
+	result, ok := out["result"].(string)
+	if !ok {
+		t.Fatalf("expected raw result as string, got %T", out["result"])
+	}
+	if len(result) != len(long) {
+		t.Errorf("expected full result length=%d, got %d", len(long), len(result))
 	}
 }
 
 func TestEnrichMetricsOutput_LabelNamesArray(t *testing.T) {
 	raw := `{"status":"success","data":["__name__","job","instance"]}`
-	out := enrichMetricsOutput("label_names", raw)
+	out := enrichMetricsOutput("label_names", nil, raw)
 
-	if out["result_count"] != "3" {
-		t.Errorf("expected result_count=\"3\", got %v", out["result_count"])
+	if out["result_count"] != 3 {
+		t.Errorf("expected result_count=3, got %v", out["result_count"])
 	}
 }
 
 func TestEnrichMetricsOutput_InvalidJSON(t *testing.T) {
-	out := enrichMetricsOutput("metadata", "not-json")
+	out := enrichMetricsOutput("metadata", nil, "not-json")
 
 	if out["action"] != "metadata" {
 		t.Errorf("expected action=metadata, got %v", out["action"])
@@ -138,7 +164,7 @@ func TestSchema_MatchesInfo(t *testing.T) {
 
 func TestEnrichMetricsOutput_JSONMarshalable(t *testing.T) {
 	raw := `{"status":"success","data":{"result":[]}}`
-	out := enrichMetricsOutput("instant_query", raw)
+	out := enrichMetricsOutput("instant_query", nil, raw)
 
 	_, err := json.Marshal(out)
 	if err != nil {
